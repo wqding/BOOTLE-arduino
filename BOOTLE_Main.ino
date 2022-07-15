@@ -2,6 +2,16 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
+#include "Adafruit_ThinkInk.h"
+
+#define EPD_CS      7
+#define EPD_DC      6
+#define SRAM_CS     11
+#define EPD_RESET   14 // can set to -1 and share with microcontroller Reset!
+#define EPD_BUSY    13 // can set to -1 to not use a pin (will wait a fixed delay)
+
+ThinkInk_290_Mono_M06 display(EPD_DC, EPD_RESET, EPD_CS, SRAM_CS, EPD_BUSY);
+
 // Data wire is plugged into port 2 on the Arduino
 #define ONE_WIRE_BUS 2
 
@@ -36,8 +46,10 @@ void setup(void)
 {
   // start serial port
   Serial.begin(9600);
+  while (!Serial) { delay(10); }
 
   sensors.begin();
+  display.begin(THINKINK_MONO);
 
 
   // report parasite power requirements
@@ -90,6 +102,7 @@ void loop(void)
   printTemperature(insideThermometer); // Use a simple function to print out the data
 
   loop_level();
+  loop_display();
 
 }
 
@@ -107,7 +120,7 @@ void loop_level()
   waterheight = SERIESRESISTOR / waterheight;
 //  Serial.print("Sensor resistance "); 
 //  Serial.println(reading);
-  waterheight = 6 - ((waterheight-400)/120);
+  waterheight = ((waterheight-400)/120);
 
 //  Serial.print("Water height (inches): "); 
 //  Serial.println(reading);
@@ -115,12 +128,28 @@ void loop_level()
   percentfull = (waterheight/5) *100;
 
   Serial.print("Percent full: "); 
-  Serial.println(percentfull);
+  Serial.println(waterheight);
   
  
   delay(1000);
 
 
+}
+
+void loop_display(){
+  display.clearBuffer();
+  display.setTextSize(2);
+  display.setCursor(0, 0);
+  display.setTextColor(EPD_BLACK);
+  display.print("Water Temp: ");
+  display.print(tempC);
+  display.println("");
+  display.print("Percent Full: ");
+  display.print(waterheight);
+  display.println("");
+  display.display();
+  delay(180000);
+  
 }
 
 // function to print a device address
