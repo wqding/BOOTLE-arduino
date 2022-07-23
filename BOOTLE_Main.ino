@@ -1,4 +1,6 @@
 // Include the libraries we need
+#include <Arduino.h>
+#include <ArduinoBLE.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
@@ -37,8 +39,22 @@ float percentfull;
 #define SERIESRESISTOR 560    
  
 // What pin to connect the sensor to
-#define SENSORPIN A1 
+#define SENSORPIN A3 
 
+
+//BLUETOOTH STUFF
+#define SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+#define ANALOG_READ_UUID "6d68efe5-04b6-4a85-abc4-c2670b7bf7fd"
+#define DIGITAL_WRITE_UUID "f27b53ad-c63d-49a0-8c0f-9f297e6cc520"
+
+BLEService newService(SERVICE_UUID); // creating the service
+
+BLEByteCharacteristic heightSend(ANALOG_READ_UUID, BLERead | BLENotify | BLEWrite); // creating the Analog Value characteristic
+BLEByteCharacteristic tempSend(ANALOG_READ_UUID, BLERead | BLENotify | BLEWrite); // creating the Analog Value characteristic
+BLEByteCharacteristic batterySend(ANALOG_READ_UUID, BLERead | BLENotify | BLEWrite); // creating the Analog Value characteristic
+BLEByteCharacteristic displayMode(DIGITAL_WRITE_UUID, BLERead | BLENotify | BLEWrite); // creating the LED characteristic
+
+long previousMillis = 0;
 /*
  * Setup function. Here we do the basics
  */
@@ -51,11 +67,36 @@ void setup(void)
   sensors.begin();
   display.begin(THINKINK_MONO);
 
+  pinMode(LED_BUILTIN, OUTPUT); // initialize the built-in LED to indicate when a central is connected
+  digitalWrite(LED_BUILTIN, LOW); 
+
+  if (!BLE.begin()) {
+    Serial.println("starting BLE failed!");
+    while (1);
+  }
+
+  BLE.setLocalName("BOOTLE"); //Setting a name that will appear when scanning for bluetooth devices
+  BLE.setAdvertisedService(newService);
+
+  newService.addCharacteristic(displayMode); //add characteristics to a service
+  newService.addCharacteristic(heightSend);
+  newService.addCharacteristic(tempSend);
+  newService.addCharacteristic(batterySend);
+
+  BLE.addService(newService);  // adding the service
+
+  displayMode.writeValue(3); //set initial value for characteristics
+  heightSend.writeValue(1);
+  tempSend.writeValue(1);
+  batterySend.writeValue(1);
+
+  BLE.advertise(); //start advertising the service
+  Serial.println("Bluetooth device active, waiting for connections...");
 
   // report parasite power requirements
-  Serial.print("Parasite power is: "); 
-  if (sensors.isParasitePowerMode()) Serial.println("ON");
-  else Serial.println("OFF");
+//  Serial.print("Parasite power is: "); 
+//  if (sensors.isParasitePowerMode()) Serial.println("ON");
+//  else Serial.println("OFF");
   
   // Assign address manually. The addresses below will beed to be changed
   // to valid device addresses on your bus. Device address can be retrieved
@@ -95,14 +136,45 @@ void printTemperature(DeviceAddress deviceAddress)
  */
 void loop(void)
 { 
-  sensors.requestTemperatures(); // Send the command to get temperatures
-  Serial.print("Parasite power is: ");
-  
-  // It responds almost immediately. Let's print out the data
-  printTemperature(insideThermometer); // Use a simple function to print out the data
 
-  loop_level();
-  loop_display();
+  BLEDevice central = BLE.central(); // wait for a BLE central
+
+  if (central) {  // if a central is connected to the peripheral
+    Serial.print("Connected to central: ");
+    
+    Serial.println(central.address()); // print the central's BT address
+    
+    digitalWrite(LED_BUILTIN, HIGH); // turn on the LED to indicate the connection
+
+    // read value 3000ms
+    // while the central is connected:
+    while (central.connected()) {
+      long currentMillis = millis();
+      
+      if (currentMillis - previousMillis >= 1000) { // if 5000ms have passed, we check the A1 pin
+          // It responds almost immediately. Let's print out the data
+        sensors.requestTemperatures(); // Send the command to get temperatures
+        printTemperature(insideThermometer); // Use a simple function to print out the data
+      
+        loop_level();
+        previousMillis = currentMillis;
+
+        batterySend.writeValue(100);
+        tempSend.writeValue(tempC);
+        heightSend.writeValue(waterheight);
+
+        if (displayMode.written()) {
+          Serial.println(displayMode.value());
+          update_display(displayMode.value());
+        }
+
+      }
+    }
+    
+    digitalWrite(LED_BUILTIN, LOW); // when the central disconnects, turn off the LED
+    Serial.print("Disconnected from central: ");
+    Serial.println(central.address());
+  }
 
 }
 
@@ -111,44 +183,82 @@ void loop_level()
      // WATER LEVEL
  
   waterheight = analogRead(SENSORPIN);
+
+//  float voltage = waterheight * (5.0/1023.0);
  
 //  Serial.print("Analog reading "); 
-//  Serial.println(reading);
+//  Serial.println(waterheight);
  
   // convert the value to resistance
   waterheight = (1023 / waterheight)  - 1;
   waterheight = SERIESRESISTOR / waterheight;
+//
 //  Serial.print("Sensor resistance "); 
-//  Serial.println(reading);
-  waterheight = ((waterheight-400)/120);
+//  Serial.println(waterheight);
+  
+//  Serial.println(voltage);
+  waterheight = 5-((waterheight-640)/140);
 
-//  Serial.print("Water height (inches): "); 
-//  Serial.println(reading);
+  Serial.print("Water height (inches): "); 
+  Serial.println(waterheight);
   
   percentfull = (waterheight/5) *100;
 
   Serial.print("Percent full: "); 
-  Serial.println(waterheight);
+  Serial.println(percentfull);
   
  
-  delay(1000);
+//  delay(1000);
 
 
 }
 
-void loop_display(){
-  display.clearBuffer();
-  display.setTextSize(2);
-  display.setCursor(0, 0);
-  display.setTextColor(EPD_BLACK);
-  display.print("Water Temp: ");
-  display.print(tempC);
-  display.println("");
-  display.print("Percent Full: ");
-  display.print(waterheight);
-  display.println("");
-  display.display();
-  delay(180000);
+void update_display(int mode){
+  if(mode == 0){
+    display.clearBuffer();
+    display.setTextSize(2);
+    display.setCursor(0, 0);
+    display.setTextColor(EPD_BLACK);
+    display.print("Height: ");
+    display.print(waterheight);
+    display.println("");
+    display.display();
+  } else if(mode == 1){
+    display.clearBuffer();
+    display.setTextSize(3);
+    display.setCursor(0, 0);
+    display.setTextColor(EPD_BLACK);
+    display.print("Full: ");
+    display.print(percentfull);
+    display.println("");
+    display.display();
+  } else if(mode == 2){
+    display.clearBuffer();
+    display.setTextSize(3);
+    display.setCursor(0, 0);
+    display.setTextColor(EPD_BLACK);
+    display.print("Temp: ");
+    display.print(tempC);
+    display.println("");
+    display.display();
+  } else if(mode == 3){
+    display.clearBuffer();
+    display.setTextSize(2);
+    display.setCursor(0, 0);
+    display.setTextColor(EPD_BLACK);
+    display.print("Water Temp: ");
+    display.print(tempC);
+    display.println("");
+    display.print("Percent Full: ");
+    display.print(percentfull);
+    display.println("");
+    display.print("Water Height: ");
+    display.print(waterheight);
+    display.println("");
+    display.display();
+  }
+
+//  delay(180000);
   
 }
 
